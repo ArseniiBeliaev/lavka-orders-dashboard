@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Заказы в Лавке</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vue@3.4.38/dist/vue.global.prod.js"></script>
+</head>
+<body>
+<div id="app" v-cloak>
+  <header class="top">
+    <div>
+      <h1>Заказы в Лавке</h1>
+      <p class="sub" v-if="ready">
+        Покупатель из датасета недели 1 · {{ fmtMonthLong(firstMonth) }} — {{ fmtMonthLong(lastMonth) }} ·
+        {{ fmtInt(totalOrders) }} доставленных заказов
+      </p>
+    </div>
+  </header>
+
+  <!-- фильтр по категориям -->
+  <section class="filters" v-if="ready">
+    <span class="filters-label">Категории</span>
+    <button class="chip" :class="{ on: !selected.size }" @click="selected = new Set()">Все</button>
+    <button v-for="(c, i) in cats" :key="c" class="chip" :class="{ on: selected.has(i) }" @click="toggleCat(i)">
+      <img v-if="catTopItems.get(i) && imgSrc(catTopItems.get(i)[0])" class="chip-img" :src="imgSrc(catTopItems.get(i)[0])" alt="">{{ c }}
+    </button>
+  </section>
+
+  <!-- KPI -->
+  <section class="kpis" v-if="ready">
+    <div class="kpi" v-for="k in kpis" :key="k.key">
+      <div class="kpi-label">{{ k.label }} <span class="muted">· {{ fmtMonthLong(lastMonth) }}</span></div>
+      <div class="kpi-value">{{ k.fmt(k.cur) }}</div>
+      <div class="kpi-deltas">
+        <span :class="deltaClass(k, k.cur - k.prev)">{{ fmtDelta(k, k.prev) }}</span> <span class="muted">к прошлому месяцу</span><br>
+        <span :class="deltaClass(k, k.cur - k.yoy)">{{ fmtDelta(k, k.yoy) }}</span> <span class="muted">к {{ fmtMonthShort(yoyMonth) }}</span>
+      </div>
+      <div class="kpi-avg muted">в среднем за 24 мес: {{ k.fmt(k.avg) }}</div>
+    </div>
+  </section>
+
+  <!-- динамика 24 месяца -->
+  <section class="card" v-if="ready">
+    <div class="card-head">
+      <h2>Динамика за 24 месяца</h2>
+      <span class="muted">наведите на месяц, чтобы увидеть все три метрики</span>
+    </div>
+    <div ref="trend" class="chart"></div>
+  </section>
+
+  <div class="grid2" v-if="ready">
+    <!-- позиции -->
+    <section class="card">
+      <div class="card-head">
+        <h2>Что покупает чаще всего</h2>
+        <div class="seg">
+          <button :class="{ on: metric === 'qty' }" @click="metric = 'qty'">в штуках</button>
+          <button :class="{ on: metric === 'spend' }" @click="metric = 'spend'">в рублях</button>
+        </div>
+        <div class="seg">
+          <button :class="{ on: period === 24 }" @click="period = 24">24 мес</button>
+          <button :class="{ on: period === 0 }" @click="period = 0">всё время</button>
+        </div>
+      </div>
+      <p class="muted note">Топ-15 позиций{{ selected.size ? ' в выбранных категориях' : '' }}. Доставка и упаковка не учитываются. Наведите на позицию, чтобы увидеть динамику цены.</p>
+      <div ref="items" class="chart"></div>
+    </section>
+
+    <!-- категории -->
+    <section class="card">
+      <div class="card-head">
+        <h2>Категории</h2>
+        <span class="muted">{{ period ? 'за 24 мес' : 'за всё время' }} · клик — фильтр</span>
+      </div>
+      <table class="cats">
+        <thead>
+          <tr><th>Категория и любимые позиции</th><th class="num">Траты</th><th class="num">Заказов</th><th class="num">Скидка</th><th>Траты по месяцам</th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="c in catStats" :key="c.idx" :class="{ on: selected.has(c.idx), dim: selected.size && !selected.has(c.idx) }" @click="toggleCat(c.idx)">
+            <td>
+              <div class="cat-name">{{ c.name }}</div>
+              <div class="cat-thumbs"><img v-for="n in catTopItems.get(c.idx)" :key="n" :src="imgSrc(n)" :title="n" alt=""></div>
+              <div class="share"><div class="share-bar" :style="{ width: (c.share / maxShare * 100) + '%' }"></div><span>{{ fmtPct(c.share) }}</span></div>
+            </td>
+            <td class="num">{{ fmtRub(c.spend) }}</td>
+            <td class="num">{{ fmtInt(c.orders) }}</td>
+            <td class="num">{{ fmtPct(c.disc) }}</td>
+            <td><svg class="spark" viewBox="0 0 120 28" preserveAspectRatio="none"><path :d="c.spark"/></svg></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+  </div>
+
+  <footer class="muted" v-if="ready">
+    Скидка — доля сэкономленного от суммы без скидки. Учтены только доставленные заказы (отменённые исключены).
+    Данные: датасет «Вариант A. Дом и дача», курс «Визуализация», ЦУ.
+  </footer>
+
+  <!-- тултип -->
+  <div class="tip" v-show="tip.show" :style="{ left: tip.x + 'px', top: tip.y + 'px' }" ref="tip">
+    <template v-if="tip.kind === 'month'">
+      <div class="tip-title">{{ fmtMonthLong(tip.d.m) }}</div>
+      <div class="tip-row"><span>Заказов</span><b>{{ fmtInt(tip.d.orders) }}</b></div>
+      <div class="tip-row"><span>Траты</span><b>{{ fmtRub(tip.d.spend) }}</b></div>
+      <div class="tip-row"><span>Средняя скидка</span><b>{{ fmtPct(tip.d.disc) }}</b></div>
+      <div class="tip-row"><span>Сэкономлено</span><b>{{ fmtRub(tip.d.full - tip.d.spend) }}</b></div>
+    </template>
+    <template v-if="tip.kind === 'item'">
+      <div class="tip-item">
+        <img v-if="imgSrc(tip.d.name)" :src="imgSrc(tip.d.name)" alt="">
+        <span v-else class="tip-ico">{{ catIcon(cats[tip.d.cat]) }}</span>
+        <div><div class="tip-title">{{ tip.d.name }}</div><div class="muted">{{ cats[tip.d.cat] }}</div></div>
+      </div>
+      <div class="tip-row"><span>Куплено</span><b>{{ fmtInt(tip.d.qty) }} шт. в {{ fmtInt(tip.d.orders) }} заказах</b></div>
+      <div class="tip-row"><span>Потрачено</span><b>{{ fmtRub(tip.d.spend) }}</b></div>
+      <div class="tip-row"><span>Последняя цена</span><b>{{ fmtRub(tip.d.lastPrice) }} <span class="muted">({{ fmtDay(tip.d.lastDate) }})</span></b></div>
+      <div class="tip-sub">Цена за штуку по месяцам покупки</div>
+      <div ref="tipChart"></div>
+      <div class="tip-legend"><span class="lg lg-full"></span>без скидки <span class="lg lg-disc"></span>заплачено</div>
+    </template>
+  </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
